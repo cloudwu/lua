@@ -274,3 +274,11 @@ const char *luaF_getlocalname (const Proto *f, int local_number, int pc) {
   return NULL;  /* not found */
 }
 
+void luaF_shareproto (Proto *f) {
+  int i;
+  if (f == NULL)
+    return;
+  setage(f, G_SHARED);
+  for (i = 0; i < f->sizep; i++)
+    luaF_shareproto(f->p[i]);
+}
