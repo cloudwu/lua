@@ -319,8 +319,11 @@ static void reallymarkobject (global_State *g, GCObject *o) {
       }
       /* else... */
     }  /* FALLTHROUGH */
-    case LUA_VLCL: case LUA_VCCL: case LUA_VTABLE:
-    case LUA_VTHREAD: case LUA_VPROTO: {
+    case LUA_VLCL: case LUA_VPROTO: case LUA_VTABLE:
+      if (isshared(o))
+        return;
+      /* FALLTHROUGH */
+    case LUA_VTHREAD: case LUA_VCCL:  {
       linkobjgclist(o, g->gray);  /* to be visited later */
       break;
     }
@@ -1121,7 +1124,8 @@ static GCObject **sweepgen (lua_State *L, global_State *g, GCObject **p,
     G_OLD,       /* from G_OLD1 */
     G_OLD,       /* from G_OLD (do not change) */
     G_TOUCHED1,  /* from G_TOUCHED1 (do not change) */
-    G_TOUCHED2   /* from G_TOUCHED2 (do not change) */
+    G_TOUCHED2,  /* from G_TOUCHED2 (do not change) */
+    G_SHARED,
   };
   int white = luaC_white(g);
   GCObject *curr;
