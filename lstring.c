@@ -39,6 +39,11 @@ int luaS_eqlngstr (TString *a, TString *b) {
      (memcmp(getlngstr(a), getlngstr(b), len) == 0));  /* equal contents */
 }
 
+int luaS_eqshrstr (TString *a, TString *b) {
+  lu_byte len = a->shrlen;
+  lua_assert(b->tt == LUA_TSHRSTR);
+  return len == b->shrlen && (memcmp(getstr(a), getstr(b), len) == 0);
+}
 
 unsigned int luaS_hash (const char *str, size_t l, unsigned int seed) {
   unsigned int h = seed ^ cast_uint(l);
