@@ -61,5 +61,4 @@ LUAI_FUNC const char *luaF_getlocalname (const Proto *func, int local_number,
                                          int pc);
 LUAI_FUNC void luaF_shareproto (Proto *func);
 
-
 #endif

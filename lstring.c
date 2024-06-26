@@ -20,7 +20,10 @@
 #include "lobject.h"
 #include "lstate.h"
 #include "lstring.h"
+#include "atomic.h"
 
+static unsigned int STRSEED;
+static ATOM_SIZET STRID = 0;
 
 /*
 ** Maximum size for string table.
@@ -40,9 +43,25 @@ int luaS_eqlngstr (TString *a, TString *b) {
 }
 
 int luaS_eqshrstr (TString *a, TString *b) {
+  int r;
   lu_byte len = a->shrlen;
-  lua_assert(b->tt == LUA_TSHRSTR);
-  return len == b->shrlen && (memcmp(getstr(a), getstr(b), len) == 0);
+  lua_assert(b->tt == LUA_VSHRSTR);
+  r = len == b->shrlen && (memcmp(getstr(a), getstr(b), len) == 0);
+  if (r) {
+    if (a->id < b->id) {
+      a->id = b->id;
+    } else {
+      b->id = a->id;
+    }
+  }
+  return r;
+}
+
+void luaS_share (TString *ts) {
+  if (ts == NULL || isshared(ts))
+    return;
+  makeshared(ts);
+  ts->id = ATOM_FDEC(&STRID)-1;
 }
 
 unsigned int luaS_hash (const char *str, size_t l, unsigned int seed) {
@@ -121,6 +140,21 @@ void luaS_clearcache (global_State *g) {
     }
 }
 
+#if !defined(luai_makeseed)
+
+#include <time.h>
+
+static unsigned int luai_makeseed(lua_State *L) {
+	size_t buff[4];
+	unsigned int h = time(NULL);
+	buff[0] = cast(size_t, h);
+	buff[1] = cast(size_t, &STRSEED);
+	buff[2] = cast(size_t, &luai_makeseed);
+	buff[3] = cast(size_t, L);
+	return luaS_hash((const char*)buff, sizeof(buff), h);
+}
+
+#endif
 
 /*
 ** Initialize the string table and the string cache
@@ -128,7 +162,11 @@ void luaS_clearcache (global_State *g) {
 void luaS_init (lua_State *L) {
   global_State *g = G(L);
   int i, j;
-  stringtable *tb = &G(L)->strt;
+  stringtable *tb;
+  if (STRSEED == 0) {
+    STRSEED = luai_makeseed(L);
+  }
+  tb = &G(L)->strt;
   tb->hash = luaM_newvector(L, MINSTRTABSIZE, TString*);
   tablerehash(tb->hash, 0, MINSTRTABSIZE);  /* clear array */
   tb->size = MINSTRTABSIZE;
@@ -154,13 +192,14 @@ static TString *createstrobj (lua_State *L, size_t l, int tag, unsigned int h) {
   ts = gco2ts(o);
   ts->hash = h;
   ts->extra = 0;
+  ts->id = 0;
   getstr(ts)[l] = '\0';  /* ending 0 */
   return ts;
 }
 
 
 TString *luaS_createlngstrobj (lua_State *L, size_t l) {
-  TString *ts = createstrobj(L, l, LUA_VLNGSTR, G(L)->seed);
+  TString *ts = createstrobj(L, l, LUA_VLNGSTR, STRSEED);
   ts->u.lnglen = l;
   ts->shrlen = 0xFF;  /* signals that it is a long string */
   return ts;
@@ -195,7 +234,7 @@ static TString *internshrstr (lua_State *L, const char *str, size_t l) {
   TString *ts;
   global_State *g = G(L);
   stringtable *tb = &g->strt;
-  unsigned int h = luaS_hash(str, l, g->seed);
+  unsigned int h = luaS_hash(str, l, STRSEED);
   TString **list = &tb->hash[lmod(h, tb->size)];
   lua_assert(str != NULL);  /* otherwise 'memcmp'/'memcpy' are undefined */
   for (ts = *list; ts != NULL; ts = ts->u.hnext) {

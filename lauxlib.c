@@ -781,7 +781,7 @@ static int skipcomment (FILE *f, int *cp) {
 }
 
 
-LUALIB_API int luaL_loadfilex (lua_State *L, const char *filename,
+LUALIB_API int luaL_loadfilex_ (lua_State *L, const char *filename,
                                              const char *mode) {
   LoadF lf;
   int status, readstatus;
@@ -1124,3 +1124,188 @@ LUALIB_API void luaL_checkversion_ (lua_State *L, lua_Number ver, size_t sz) {
                   (LUAI_UACNUMBER)ver, (LUAI_UACNUMBER)v);
 }
 
+// use clonefunction
+
+#include "spinlock.h"
+
+struct codecache {
+	struct spinlock lock;
+	lua_State *L;
+};
+
+static struct codecache CC;
+
+static void
+clearcache(void) {
+	if (CC.L == NULL)
+		return;
+	SPIN_LOCK(&CC)
+		lua_close(CC.L);
+		CC.L = luaL_newstate();
+	SPIN_UNLOCK(&CC)
+}
+
+static void
+init(void) {
+	CC.L = luaL_newstate();
+}
+
+
+void luaL_initcodecache(void);
+
+LUALIB_API void
+luaL_initcodecache(void) {
+	SPIN_INIT(&CC);
+}
+
+static const void *
+load_proto(const char *key) {
+  lua_State *L;
+  const void * result;
+  if (CC.L == NULL)
+    return NULL;
+  SPIN_LOCK(&CC)
+    L = CC.L;
+    lua_pushstring(L, key);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    result = lua_touserdata(L, -1);
+    lua_pop(L, 1);
+  SPIN_UNLOCK(&CC)
+
+  return result;
+}
+
+static const void *
+save_proto(const char *key, const void * proto) {
+  lua_State *L;
+  const void * result = NULL;
+
+  SPIN_LOCK(&CC)
+    if (CC.L == NULL) {
+      init();
+    }
+    L = CC.L;
+    lua_pushstring(L, key);
+    lua_pushvalue(L, -1);
+    lua_rawget(L, LUA_REGISTRYINDEX);
+    result = lua_touserdata(L, -1); /* stack: key oldvalue */
+    if (result == NULL) {
+      lua_pop(L,1);
+      lua_pushlightuserdata(L, (void *)proto);
+      lua_rawset(L, LUA_REGISTRYINDEX);
+    } else {
+      lua_pop(L,2);
+    }
+
+  SPIN_UNLOCK(&CC)
+  return result;
+}
+
+#define CACHE_OFF 0
+#define CACHE_EXIST 1
+#define CACHE_ON 2
+
+static int cache_key = 0;
+
+static int cache_level(lua_State *L) {
+	int t = lua_rawgetp(L, LUA_REGISTRYINDEX, &cache_key);
+	int r = lua_tointeger(L, -1);
+	lua_pop(L,1);
+	if (t == LUA_TNUMBER) {
+		return r;
+	}
+	return CACHE_ON;
+}
+
+static int cache_mode(lua_State *L) {
+	static const char * lst[] = {
+		"OFF",
+		"EXIST",
+		"ON",
+		NULL,
+	};
+	int t,r;
+	if (lua_isnoneornil(L,1)) {
+		t = lua_rawgetp(L, LUA_REGISTRYINDEX, &cache_key);
+		r = lua_tointeger(L, -1);
+		if (t == LUA_TNUMBER) {
+			if (r < 0  || r >= CACHE_ON) {
+				r = CACHE_ON;
+			}
+		} else {
+			r = CACHE_ON;
+		}
+		lua_pushstring(L, lst[r]);
+		return 1;
+	}
+	t = luaL_checkoption(L, 1, "OFF" , lst);
+	lua_pushinteger(L, t);
+	lua_rawsetp(L, LUA_REGISTRYINDEX, &cache_key);
+	return 0;
+}
+
+LUALIB_API int luaL_loadfilex (lua_State *L, const char *filename,
+                                             const char *mode) {
+  int level = cache_level(L);
+  const void * proto;
+  lua_State * eL;
+  int err;
+  const void * oldv;
+  if (level == CACHE_OFF || filename == NULL) {
+    return luaL_loadfilex_(L, filename, mode);
+  }
+  proto = load_proto(filename);
+  if (proto) {
+    lua_clonefunction(L, proto);
+    return LUA_OK;
+  }
+  if (level == CACHE_EXIST) {
+    return luaL_loadfilex_(L, filename, mode);
+  }
+  eL = luaL_newstate();
+  if (eL == NULL) {
+    lua_pushliteral(L, "New state failed");
+    return LUA_ERRMEM;
+  }
+  err = luaL_loadfilex_(eL, filename, mode);
+  if (err != LUA_OK) {
+    size_t sz = 0;
+    const char * msg = lua_tolstring(eL, -1, &sz);
+    lua_pushlstring(L, msg, sz);
+    lua_close(eL);
+    return err;
+  }
+  lua_sharefunction(eL, -1);
+  proto = lua_topointer(eL, -1);
+  oldv = save_proto(filename, proto);
+  if (oldv) {
+    lua_close(eL);
+    lua_clonefunction(L, oldv);
+  } else {
+    lua_clonefunction(L, proto);
+    /* Never close it. notice: memory leak */
+  }
+
+  return LUA_OK;
+}
+
+static int
+cache_clear(lua_State *L) {
+	(void)(L);
+	clearcache();
+	return 0;
+}
+
+int luaopen_cache(lua_State *L);
+
+LUAMOD_API int luaopen_cache(lua_State *L) {
+	luaL_Reg l[] = {
+		{ "clear", cache_clear },
+		{ "mode", cache_mode },
+		{ NULL, NULL },
+	};
+	luaL_newlib(L,l);
+	lua_getglobal(L, "loadfile");
+	lua_setfield(L, -2, "loadfile");
+	return 1;
+}

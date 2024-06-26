@@ -105,7 +105,7 @@ typedef struct TValue {
 */
 #define checkliveness(L,obj) \
 	((void)L, lua_longassert(!iscollectable(obj) || \
-		(righttt(obj) && (L == NULL || !isdead(G(L),gcvalue(obj)) || isshared(gcvalue(obj)) ))))
+		(righttt(obj) && (L == NULL || !isdead(G(L),gcvalue(obj)) || isshared(gcvalue(obj))))))
 
 
 /* Macros to set values */
@@ -388,6 +388,7 @@ typedef struct TString {
   lu_byte extra;  /* reserved words for short strings; "has hash" for longs */
   lu_byte shrlen;  /* length for short strings, 0xFF for long strings */
   unsigned int hash;
+  size_t id;	/* id for short strings */
   union {
     size_t lnglen;  /* length for long strings */
     struct TString *hnext;  /* linked list for hash table */
